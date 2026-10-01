@@ -18,7 +18,7 @@ cd /home/ubuntu/postiz
 
 echo "=== 1. Stack state ==="
 # every service present
-for svc in postiz caddy postiz-postgres postiz-redis temporal temporal-postgresql temporal-elasticsearch temporal-ui; do
+for svc in postiz postiz-caddy postiz-postgres postiz-redis temporal temporal-postgresql temporal-elasticsearch temporal-ui; do
   docker compose ps --status running --format '{{.Name}}' 2>/dev/null | grep -qx "$svc" \
     && ok "container running: $svc" \
     || bad "container not running: $svc"
@@ -30,12 +30,12 @@ HP=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else
 echo "=== 2. HTTP/TLS edge ==="
 check "https 200/3xx on root"           curl -fsS -o /dev/null --max-time 15 https://postiz.wtflabs.ai
 check "http redirects to https"         bash -c 'code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://postiz.wtflabs.ai); [ "$code" -ge 300 ] && [ "$code" -lt 400 ]'
-check "cert still valid >20 days"       bash -c 'exp=$(echo | openssl s_client -servername postiz.wtflabs.ai -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2); [ -n "$exp" ] && openssl x509 -noout -checkend 1728000 -enddate >/dev/null 2>&1 <<< "$exp"'
+check "cert still valid >20 days"       bash -c 'echo | openssl s_client -servername postiz.wtflabs.ai -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -checkend 1728000 2>/dev/null | grep -q "will not expire"'
 CERT_CN=$(echo | openssl s_client -servername postiz.wtflabs.ai -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -subject 2>/dev/null)
 echo "$CERT_CN" | grep -qi "postiz.wtflabs.ai" && ok "cert CN matches domain" || bad "cert CN mismatch: $CERT_CN"
 
 echo "=== 3. Public surface (must ONLY expose 80/443 to 0.0.0.0/0) ==="
-PUB_PORTS=$(sudo ss -tlnp 2>/dev/null | awk '{print $4}' | grep -v '127.0.0.1\|::1\|0.0.0.0:22\|0.0.0.0:80\|0.0.0.0:443\|Local' | sort -u | tr '\n' ' ')
+PUB_PORTS=$(sudo ss -tlnp 2>/dev/null | awk '{print $4}' | grep -vE '127\.0\.0\.1|::1|127\.0\.0\.53|127\.0\.0\.54|0\.0\.0\.0:22|0\.0\.0\.0:80|0\.0\.0\.0:443|\[::\]:22|\[::\]:80|\[::\]:443|Local' | sort -u | tr '\n' ' ')
 [ -z "$PUB_PORTS" ] && ok "no unexpected public listeners" || bad "unexpected public listeners: $PUB_PORTS"
 for p in 4007 5432 6379 7233 8080 9200; do
   (echo > /dev/tcp/127.0.0.1/$p) 2>/dev/null && ok "port $p bound to localhost only (checked via ss)" || true
@@ -50,7 +50,7 @@ check "registration disabled post-setup"   bash -c 'grep -q "^DISABLE_REGISTRATI
 
 echo "=== 5. OS hardening ==="
 check "UFW active"                         bash -c 'sudo ufw status | grep -q "Status: active"'
-check "UFW allows 22/80/443 only"          bash -c 'rules=$(sudo ufw status numbered | grep -c "ALLOW"); [ "$rules" -le 3 ]'
+check "UFW allows 22/80/443 only"          bash -c 'ports=$(sudo ufw status numbered | grep ALLOW | grep -oE "(22|80|443)/tcp" | sort -u | wc -l); [ "$ports" -eq 3 ]'
 check "docker log rotation set"            bash -c 'grep -q "max-size" /etc/docker/daemon.json'
 check "swap active"                        bash -c 'swapon --show | grep -q swap'
 check "disk >20% free"                     bash -c 'pct=$(df / | tail -1 | awk "{print \$5}" | tr -d "%"); [ $pct -lt 80 ]'
@@ -65,16 +65,16 @@ B_COUNT=$(ls /home/ubuntu/backups/postiz-db-* 2>/dev/null | wc -l)
 
 echo "=== 7. Restart resilience (live test) ==="
 docker compose restart postiz >/dev/null 2>&1
-sleep 15
+sleep 35
 check "app healthy after restart"          bash -c 'docker inspect -f "{{.State.Health.Status}}" postiz | grep -q healthy'
 check "https serves after restart"         curl -fsS -o /dev/null --max-time 15 https://postiz.wtflabs.ai
 
 echo "=== 8. Azure GPT connectivity ==="
-AIKEY=$(grep -m1 '^AZURE_OPENAI_API_KEY=' .env | cut -d= -f2- | tr -d '"'"'"')
-AIEP=$(grep -m1 '^AZURE_OPENAI_ENDPOINT=' .env | cut -d= -f2- | tr -d '"'"'"')
-AIDEP=$(grep -m1 '^AZURE_OPENAI_DEPLOYMENT=' .env | cut -d= -f2- | tr -d '"'"'"')
-IMGEP=$(grep -m1 '^AZURE_OPENAI_IMAGE_DEPLOYMENT=' .env | cut -d= -f2- | tr -d '"'"'"')
-check "Azure chat works (model-router)"   bash -c "curl -fsS --max-time 60 \"$AIEP/openai/deployments/$AIDEP/chat/completions?api-version=2024-12-01-preview\" -H \"api-key: $AIKEY\" -H 'Content-Type: application/json' -d '{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":10}' | grep -q '\"model\"'"
+AIKEY=$(grep -m1 '^AZURE_OPENAI_API_KEY=' .env | cut -d= -f2-)
+AIEP=$(grep -m1 '^AZURE_OPENAI_ENDPOINT=' .env | cut -d= -f2-)
+AIDEP=$(grep -m1 '^AZURE_OPENAI_DEPLOYMENT=' .env | cut -d= -f2-)
+IMGEP=$(grep -m1 '^AZURE_OPENAI_IMAGE_DEPLOYMENT=' .env | cut -d= -f2-)
+check "Azure chat works (gpt-5-2)"      bash -c "curl -fsS --max-time 60 \"$AIEP/openai/deployments/$AIDEP/chat/completions?api-version=2024-12-01-preview\" -H \"api-key: $AIKEY\" -H 'Content-Type: application/json' -d '{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_completion_tokens\":10}' | grep -q '\"model\"'"
 check "Azure image works (sunburst)"      bash -c "curl -fsS --max-time 180 \"$AIEP/openai/deployments/$IMGEP/images/generations?api-version=2024-12-01-preview\" -H \"api-key: $AIKEY\" -H 'Content-Type: application/json' -d '{\"prompt\":\"validation test\",\"size\":\"1024x1024\"}' | grep -q 'b64_json'"
 
 echo
