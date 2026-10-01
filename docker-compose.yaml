@@ -1,6 +1,6 @@
 services:
   postiz:
-    image: ghcr.io/wtfup/postiz-app:latest
+    image: postiz-wtf:latest
     container_name: postiz
     restart: always
     environment:
