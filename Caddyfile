@@ -1,0 +1,9 @@
+# Postiz WTF production domain config
+
+postiz.wtflabs.ai {
+	encode zstd gzip
+	# SSE + copilot streaming needs unbuffered responses
+	reverse_proxy postiz:5000 {
+		flush_interval -1
+	}
+}
