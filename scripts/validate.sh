@@ -44,7 +44,7 @@ done
 echo "=== 4. Secrets & config ==="
 check ".env exists with JWT_SECRET"        bash -c 'grep -q "^JWT_SECRET=.\{24,\}" .env'
 check ".env POSTGRES_PASSWORD strong"      bash -c 'grep -q "^POSTGRES_PASSWORD=.\{16,\}" .env'
-check "AI key configured (OPENAI_API_KEY)" bash -c 'grep -q "^OPENAI_API_KEY=.\{8,\}" .env'
+check "AI key configured (AZURE_OPENAI_API_KEY)" bash -c 'grep -q "^AZURE_OPENAI_API_KEY=.\{8,\}" .env'
 check "no default passwords in compose"    bash -c '! grep -Eq "postiz-password|CHANGE_ME" docker-compose.yaml .env'
 check "registration disabled post-setup"   bash -c 'grep -q "^DISABLE_REGISTRATION=true" .env || grep -q "DISABLE_REGISTRATION=true" docker-compose.yaml'
 
@@ -69,9 +69,13 @@ sleep 15
 check "app healthy after restart"          bash -c 'docker inspect -f "{{.State.Health.Status}}" postiz | grep -q healthy'
 check "https serves after restart"         curl -fsS -o /dev/null --max-time 15 https://postiz.wtflabs.ai
 
-echo "=== 8. DeepSeek / AI connectivity ==="
-AIKEY=$(grep -m1 '^OPENAI_API_KEY=' .env | cut -d= -f2- | tr -d '"'"'"'')
-check "AI key works (models call)"         bash -c "curl -fsS --max-time 20 https://api.deepseek.com/v1/models -H 'Authorization: Bearer $AIKEY' | grep -q '\"id\"'"
+echo "=== 8. Azure GPT connectivity ==="
+AIKEY=$(grep -m1 '^AZURE_OPENAI_API_KEY=' .env | cut -d= -f2- | tr -d '"'"'"')
+AIEP=$(grep -m1 '^AZURE_OPENAI_ENDPOINT=' .env | cut -d= -f2- | tr -d '"'"'"')
+AIDEP=$(grep -m1 '^AZURE_OPENAI_DEPLOYMENT=' .env | cut -d= -f2- | tr -d '"'"'"')
+IMGEP=$(grep -m1 '^AZURE_OPENAI_IMAGE_DEPLOYMENT=' .env | cut -d= -f2- | tr -d '"'"'"')
+check "Azure chat works (model-router)"   bash -c "curl -fsS --max-time 60 \"$AIEP/openai/deployments/$AIDEP/chat/completions?api-version=2024-12-01-preview\" -H \"api-key: $AIKEY\" -H 'Content-Type: application/json' -d '{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":10}' | grep -q '\"model\"'"
+check "Azure image works (sunburst)"      bash -c "curl -fsS --max-time 180 \"$AIEP/openai/deployments/$IMGEP/images/generations?api-version=2024-12-01-preview\" -H \"api-key: $AIKEY\" -H 'Content-Type: application/json' -d '{\"prompt\":\"validation test\",\"size\":\"1024x1024\"}' | grep -q 'b64_json'"
 
 echo
 echo "==================================="
